@@ -1,0 +1,79 @@
+name: Build Android Kernel
+
+on:
+  push:
+    branches: [ "6795-oss" ]
+  workflow_dispatch:
+    inputs:
+      codename:
+        description: 'Device name'
+        required: true
+        default: 'oppo6795_15019'
+      codebase:
+        description: 'Codebase'
+        required: true
+        default: '6795-oss'    
+env:
+  ARCH: arm64
+  CODENAME: ${{ github.event.inputs.codename || 'oppo6795_15019' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7.0.0
+      with:
+        repository: Dawn-Blossoms/android_kernel_oppo_mt6795
+        ref: ${{github.event.inputs.codebase}}
+        
+    - name: default GCC to gcc-9, python to py2.7
+      run: |
+        sudo apt-get update
+        sudo apt-get install -yq make bc gcc-9 g++-9 lib32z1 ccache python2 python3
+        sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 100
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 100
+        gcc --version
+        g++ --version
+
+    - name: Cache Toolchain
+      id: cache-toolchain
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/aarch64-linux-android-4.9
+        key: ${{ runner.os }}-toolchain-aarch64-4.9-v1
+
+    - name: Clone Toolchain (if not cached)
+      if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      run: |
+        git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+          -b android-6.0.1_r32 --depth=1 ${{ github.workspace }}/aarch64-linux-android-4.9
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ${{ runner.os }}-kernel-ccache-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-kernel-ccache-
+
+    - name: Build Kernel
+      run: |
+        export CCACHE_DIR=$HOME/.ccache
+        ccache -M 5G
+        ccache -z
+        export CROSS_COMPILE="ccache ${{ github.workspace }}/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+        make ${CODENAME}_debug_defconfig
+        make -j$(nproc --all) 2>&1 | tee build.log
+        
+        ccache -s
+
+    - name: Upload Kernel Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-build-output-${{ env.CODENAME }}
+        path: |
+          arch/arm64/boot/Image.gz-dtb
+          build.log
